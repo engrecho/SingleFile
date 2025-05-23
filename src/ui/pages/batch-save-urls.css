@@ -450,3 +450,14 @@ html.side-panel,
         color: black;
     }
 }
+
+.option {
+    margin: 10px 0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.option input {
+    margin-right: 15px;
+}
