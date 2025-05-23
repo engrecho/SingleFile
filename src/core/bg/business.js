@@ -94,10 +94,8 @@ async function batchSaveUrls() {
 }
 
 async function saveUrls(urls, options = {}) {
-	console.log('Starting saveUrls with', urls.length, 'URLs');
 	await initMaxParallelWorkers();
-	await Promise.all(urls.map(async (url, index) => {
-		console.log(`Processing URL ${index + 1}/${urls.length}:`, url);
+	await Promise.all(urls.map(async url => {
 		const tabOptions = await config.getOptions(url);
 		if (tabOptions.profileName != config.DISABLED_PROFILE_NAME) {
 			Object.keys(options).forEach(key => tabOptions[key] = options[key]);
@@ -106,20 +104,15 @@ async function saveUrls(urls, options = {}) {
 			tabOptions.extensionScriptFiles = extensionScriptFiles;
 			if (tabOptions.passReferrerOnError) {
 				requests.enableReferrerOnError();
-				console.log('Referrer enabled for URL:', url);
 			}
-			console.log('Adding task for URL:', url, 'with options:', tabOptions);
 			addTask({
 				tab: { url },
 				status: TASK_PENDING_STATE,
 				options: tabOptions,
 				method: "content.save"
 			});
-		} else {
-			console.log('URL disabled by profile:', url);
 		}
 	}));
-	console.log('All URLs processed, running tasks...');
 	runTasks();
 }
 
@@ -210,39 +203,17 @@ async function initMaxParallelWorkers() {
 	if (!maxParallelWorkers) {
 		const configData = await config.get();
 		processInForeground = configData.processInForeground;
-		// maxParallelWorkers = processInForeground ? 1 : configData.maxParallelWorkers;
-		maxParallelWorkers = 1;
+		maxParallelWorkers = processInForeground ? 1 : configData.maxParallelWorkers;
 	}
-	maxParallelWorkers = 1;
 }
+
 function runTasks() {
-	// Log current tasks status
-	console.log('Current tasks:', tasks.map(task => ({
-		id: task.id,
-		status: task.status,
-		url: task.tab.url
-	})));
-
-	// Check processing tasks
 	const processingCount = tasks.filter(taskInfo => taskInfo.status == TASK_PROCESSING_STATE).length;
-	console.log('Number of processing tasks:', processingCount);
-
-	if (processingCount > 0) {
-		console.log('Tasks already processing, waiting...');
-		return;
-	}
-
-	// Find pending task
-	const taskInfo = tasks.find(taskInfo => taskInfo.status == TASK_PENDING_STATE);
-	if (taskInfo) {
-		console.log('Starting new task:', {
-			id: taskInfo.id,
-			url: taskInfo.tab.url,
-			method: taskInfo.method
-		});
-		runTask(taskInfo);
-	} else {
-		console.log('No pending tasks found');
+	for (let index = 0; index < Math.min(tasks.length - processingCount, (maxParallelWorkers - processingCount)); index++) {
+		const taskInfo = tasks.find(taskInfo => taskInfo.status == TASK_PENDING_STATE);
+		if (taskInfo) {
+			runTask(taskInfo);
+		}
 	}
 }
 
