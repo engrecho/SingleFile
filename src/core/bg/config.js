@@ -65,6 +65,7 @@ const DEFAULT_CONFIG = {
 	loadDeferredImagesKeepZoomLevel: false,
 	loadDeferredImagesDispatchScrollEvent: false,
 	loadDeferredImagesBeforeFrames: false,
+	maxParallelWorkers: 1,
 	filenameTemplate: "%if-empty<{page-title}|No title> ({date-locale} {time-locale}).{filename-extension}",
 	infobarTemplate: "",
 	includeInfobar: !IS_NOT_SAFARI,
@@ -231,6 +232,26 @@ const MIGRATION_DEFAULT_VARIABLES_VALUES = {
 
 let configStorage;
 let pendingUpgradePromise = upgrade();
+let downloadSemaphore = {
+    queue: [],
+    running: false,
+    async acquire() {
+        if (this.running) {
+            return new Promise(resolve => this.queue.push(resolve));
+        }
+        this.running = true;
+        return Promise.resolve();
+    },
+    async release() {
+        const next = this.queue.shift();
+        if (next) {
+            next();
+        } else {
+            this.running = false;
+        }
+    }
+};
+
 export {
 	DEFAULT_PROFILE_NAME,
 	DISABLED_PROFILE_NAME,
@@ -260,7 +281,8 @@ export {
 	setAuthInfo,
 	setDropboxAuthInfo,
 	removeAuthInfo,
-	removeDropboxAuthInfo
+	removeDropboxAuthInfo,
+	downloadSemaphore
 };
 
 async function upgrade() {
@@ -271,11 +293,16 @@ async function upgrade() {
 		configStorage = browser.storage.local;
 	}
 	const config = await configStorage.get();
+	// 初始配置
+	
 	if (!config[PROFILE_NAME_PREFIX + DEFAULT_PROFILE_NAME]) {
 		if (config.profiles) {
 			const profileNames = Object.keys(config.profiles);
 			for (const profileName of profileNames) {
-				await setProfile(profileName, config.profiles[profileName]);
+				const profile = config.profiles[profileName];
+				// 确保profile的maxParallelWorkers为1
+				profile.maxParallelWorkers = 1;
+				await setProfile(profileName, profile);
 			}
 		} else {
 			await setProfile(DEFAULT_PROFILE_NAME, DEFAULT_CONFIG);
@@ -285,9 +312,6 @@ async function upgrade() {
 	}
 	if (!config.rules) {
 		await configStorage.set({ rules: DEFAULT_RULES });
-	}
-	if (!config.maxParallelWorkers) {
-		await configStorage.set({ maxParallelWorkers: navigator.hardwareConcurrency || 4 });
 	}
 	if (!config.processInForeground) {
 		await configStorage.set({ processInForeground: false });
@@ -308,8 +332,11 @@ async function upgrade() {
 			&& isSameArray(profile.filenameReplacementCharacters, DEFAULT_FILENAME_REPLACEMENT_CHARACTERS)) {
 			profile.filenameReplacedCharacters = DEFAULT_FILENAME_REPLACED_CHARACTERS;
 		}
+		profile.maxParallelWorkers = 1;
 		await setProfile(profileName, profile);
 	});
+	// 最后强制设置全局配置
+	await configStorage.set({ maxParallelWorkers: 1 });
 }
 
 function updateFilenameTemplate(template) {
@@ -338,10 +365,10 @@ async function getRule(url, ignoreWildcard) {
 
 async function getConfig() {
 	await pendingUpgradePromise;
-	const { maxParallelWorkers, processInForeground } = await configStorage.get(["maxParallelWorkers", "processInForeground"]);
+	const { processInForeground } = await configStorage.get(["processInForeground"]);
 	const rules = await getRules();
 	const profiles = await getProfiles();
-	return { profiles, rules, maxParallelWorkers, processInForeground };
+	return { profiles, rules, maxParallelWorkers: 1, processInForeground };
 }
 
 function sortRules(ruleLeft, ruleRight) {
@@ -360,11 +387,10 @@ async function onMessage(message) {
 		const { config } = message;
 		const profiles = config.profiles;
 		const rules = config.rules;
-		const maxParallelWorkers = config.maxParallelWorkers;
 		const processInForeground = config.processInForeground;
 		const profileKeyNames = await getProfileKeyNames();
 		await configStorage.remove([...profileKeyNames, "rules", "maxParallelWorkers", "processInForeground"]);
-		await configStorage.set({ rules, maxParallelWorkers, processInForeground });
+		await configStorage.set({ rules, maxParallelWorkers: 1, processInForeground });
 		Object.keys(profiles).forEach(profileName => setProfile(profileName, profiles[profileName]));
 	}
 	if (message.method.endsWith(".deleteRules")) {
@@ -582,6 +608,7 @@ async function getProfile(profileName) {
 
 async function setProfile(profileName, profileData) {
 	const profileKey = PROFILE_NAME_PREFIX + profileName;
+	profileData.maxParallelWorkers = 1;
 	await configStorage.set({ [profileKey]: profileData });
 }
 
@@ -717,7 +744,7 @@ async function importConfig(config) {
 		await tabsData.set(allTabsData);
 	}
 	await configStorage.remove([...profileKeyNames, "rules", "maxParallelWorkers", "processInForeground"]);
-	const newConfig = { rules: config.rules, maxParallelWorkers: config.maxParallelWorkers, processInForeground: config.processInForeground };
+	const newConfig = { rules: config.rules, maxParallelWorkers: 1, processInForeground: config.processInForeground };
 	Object.keys(config.profiles).forEach(profileName => newConfig[PROFILE_NAME_PREFIX + profileName] = config.profiles[profileName]);
 	await configStorage.set(newConfig);
 	await upgrade();

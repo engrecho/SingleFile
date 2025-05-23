@@ -66,12 +66,36 @@ addUrlsButton.onclick = displayAddUrlsPopup;
 if (location.href.endsWith("#side-panel")) {
 	document.documentElement.classList.add("side-panel");
 }
+
 saveUrlsButton.onclick = async () => {
-	const displayedUrls = getDisplayedUrls();
-	if (displayedUrls.length) {
-		await browser.runtime.sendMessage({ method: "downloads.saveUrls", urls: displayedUrls });
-		urls = urls.filter(url => !displayedUrls.includes(url));
-		refresh();
+    const displayedUrls = getDisplayedUrls();
+    const maxParallel = parseInt(document.getElementById('maxParallel').value) || 1;
+    const intervalTime = (parseInt(document.getElementById('intervalTime').value) || 5) * 1000;
+    
+    console.log(`Starting batch save for ${displayedUrls.length} URLs with max parallel ${maxParallel}`);
+
+    if (displayedUrls.length) {
+        for (let i = 0; i < displayedUrls.length; i += maxParallel) {
+            const batch = displayedUrls.slice(i, i + maxParallel);
+            console.log(`Processing batch ${i/maxParallel + 1}, URLs: ${batch.join(', ')}`);
+            
+            try {
+                await browser.runtime.sendMessage({ method: "downloads.saveUrls", urls: batch });
+                console.log(`Successfully sent save request for batch`);
+                
+                // Remove processed URLs
+                urls = urls.filter(url => !batch.includes(url));
+                await refresh();
+                
+                if (i + maxParallel < displayedUrls.length) {
+                    console.log(`Waiting ${intervalTime/1000} seconds before next batch...`);
+                    await new Promise(resolve => setTimeout(resolve, intervalTime));
+                }
+            } catch (error) {
+                console.error(`Error processing batch:`, error);
+            }
+        }
+		console.log('Batch save completed');
 	}
 };
 
